@@ -1,249 +1,230 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Juna Horror - P2P Ghost Game</title>
-    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-    <style>
-        body { margin: 0; background: #000; color: #0f0; font-family: 'Courier New', monospace; overflow: hidden; display: flex; flex-direction: column; align-items: center; }
-        .ui-overlay { position: absolute; top: 10px; z-index: 10; background: rgba(0,0,0,0.8); padding: 15px; border: 1px solid #0f0; width: 400px; }
-        canvas { border: 2px solid #333; }
-        .btn { background: #000; color: #0f0; border: 1px solid #0f0; padding: 8px; cursor: pointer; width: 100%; margin-top: 5px; }
-        .hidden { display: none; }
-        #game-status { font-size: 12px; margin-top: 10px; color: #fff; }
-    </style>
+<meta charset="UTF-8">
+<title>Juna Horror - P2P</title>
+
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+
+<style>
+body { margin:0; background:#000; color:#0f0; font-family:monospace; overflow:hidden;}
+.ui { position:absolute; top:10px; left:10px; background:#111; padding:15px; border:1px solid #0f0; z-index:10;}
+button,input{ background:#000; color:#0f0; border:1px solid #0f0; padding:5px; margin:3px;}
+.hidden{ display:none; }
+</style>
 </head>
 <body>
 
-<div class="ui-overlay" id="lobby">
-    <div id="setup-ui">
-        <input type="text" id="username" placeholder="Nhập tên của bạn..." class="btn" style="width: 95%;">
-        <button onclick="createRoom()" class="btn">TẠO PHÒNG & COPY LINK</button>
-        <p style="text-align: center; margin: 10px 0;">- HOẶC -</p>
-        <input type="text" id="roomIdInput" placeholder="Dán mã phòng..." class="btn" style="width: 95%;">
-        <button onclick="joinRoomManually()" class="btn">VÀO PHÒNG</button>
-    </div>
-    
-    <div id="room-info" class="hidden">
-        <div style="border-bottom: 1px solid #0f0; padding-bottom: 5px; margin-bottom: 5px;">
-            PHÒNG CỦA: <span id="host-name" style="color: yellow;">...</span>
-        </div>
-        Người chơi: <span id="player-count">1</span>/5
-        <div id="player-list-names" style="font-size: 11px; color: #888; margin: 5px 0;"></div>
-        <button id="start-btn" onclick="startGame()" class="btn hidden" style="background: #050;">BẮT ĐẦU GAME</button>
-    </div>
-    <div id="game-status">Đang chờ người chơi...</div>
+<div class="ui" id="lobby">
+<input id="nameInput" placeholder="Tên của bạn">
+<button onclick="createRoom()">Tạo phòng</button><br>
+<input id="joinInput" placeholder="Mã phòng">
+<button onclick="joinRoom()">Vào phòng</button>
+<div id="info"></div>
+<button id="startBtn" class="hidden" onclick="startGame()">START</button>
 </div>
 
 <script>
-const config = {
-    type: Phaser.AUTO,
-    width: 800,
-    height: 600,
-    physics: { default: 'arcade', arcade: { debug: false } },
-    scene: { preload: preload, create: create, update: update }
-};
 
-let game = new Phaser.Game(config);
-let scene, player, cursors, peer, myId, myName;
-let otherPlayers = {}, tombstones = [], walls;
-let connections = [], isHost = false, role = 'human', gameStarted = false;
-let playerNames = {}; // Lưu trữ { peerId: Name }
+const MAX_PLAYERS = 5
+const REQUIRED_TOMBS = 3
 
-function preload() {
-    scene = this;
-    const g = this.make.graphics({ x: 0, y: 0, add: false });
-    g.fillStyle(0x00ff00).fillRect(0, 0, 32, 32); g.generateTexture('human', 32, 32);
-    g.clear().fillStyle(0xff0000).fillRect(0, 0, 32, 32); g.generateTexture('ghost', 32, 32);
-    g.clear().fillStyle(0x555555).fillRect(0, 0, 40, 40); g.generateTexture('wall', 40, 40);
-    g.clear().fillStyle(0xffffff).fillCircle(16, 16, 10); g.generateTexture('tomb', 32, 32);
-    g.clear().fillStyle(0x442200).fillRect(0,0, 60, 30); g.generateTexture('bed', 60, 30);
+let config = {
+ type: Phaser.AUTO,
+ width: 800,
+ height: 600,
+ physics: { default:'arcade' },
+ scene: { preload, create, update }
 }
 
-function create() {
-    walls = this.physics.add.staticGroup();
-    tombstones = this.physics.add.staticGroup();
-    this.hidingSpots = this.physics.add.staticGroup();
+let game = new Phaser.Game(config)
+let scene, player, cursors
+let peer, myId, myName
+let connections=[]
+let players={}
+let tombstonesGroup, door
+let destroyedTombs = 0
+let role="human"
+let gameStarted=false
+let isHost=false
 
-    for(let i=0; i<20; i++) {
-        walls.create(i*40, 20, 'wall'); walls.create(i*40, 580, 'wall');
-        walls.create(20, i*40, 'wall'); walls.create(780, i*40, 'wall');
-    }
-    this.hidingSpots.create(200, 200, 'bed');
-    this.hidingSpots.create(600, 400, 'bed');
+function preload(){
+ scene=this
 
-    cursors = this.input.keyboard.createCursorKeys();
-    this.keyE = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
-
-    if(window.location.hash) {
-        const tid = window.location.hash.substring(1);
-        document.getElementById('roomIdInput').value = tid;
-        // Đợi Phaser khởi tạo xong
-        setTimeout(() => { if(!peer) joinRoom(tid); }, 500);
-    }
+ let g=this.make.graphics({add:false})
+ g.fillStyle(0xffffff).fillRect(0,0,32,32)
+ g.generateTexture("player",32,32)
+ g.clear()
+ g.fillStyle(0xff0000).fillRect(0,0,32,32)
+ g.generateTexture("ghost",32,32)
+ g.clear()
+ g.fillStyle(0x888888).fillRect(0,0,40,40)
+ g.generateTexture("wall",40,40)
+ g.clear()
+ g.fillStyle(0xaaaaaa).fillCircle(16,16,12)
+ g.generateTexture("tomb",32,32)
+ g.clear()
+ g.fillStyle(0x00ffff).fillRect(0,0,40,60)
+ g.generateTexture("door",40,60)
 }
 
-function update() {
-    if (!player || !gameStarted) return;
-    player.body.setVelocity(0);
-    if(player.isHiding) return;
+function create(){
+ cursors=this.input.keyboard.createCursorKeys()
 
-    const speed = (role === 'ghost') ? 220 : 160;
-    if (cursors.left.isDown) player.body.setVelocityX(-speed);
-    else if (cursors.right.isDown) player.body.setVelocityX(speed);
-    if (cursors.up.isDown) player.body.setVelocityY(-speed);
-    else if (cursors.down.isDown) player.body.setVelocityY(speed);
+ tombstonesGroup=this.physics.add.staticGroup()
 
-    if(player.body.velocity.x !== 0 || player.body.velocity.y !== 0) {
-        broadcast({ type: 'move', id: myId, x: player.x, y: player.y });
-        player.nameTag.setPosition(player.x, player.y - 25);
-    }
+ // tường viền
+ for(let i=0;i<20;i++){
+   scene.physics.add.staticImage(i*40,20,"wall")
+   scene.physics.add.staticImage(i*40,580,"wall")
+   scene.physics.add.staticImage(20,i*40,"wall")
+   scene.physics.add.staticImage(780,i*40,"wall")
+ }
 
-    if (Phaser.Input.Keyboard.JustDown(this.keyE)) {
-        scene.physics.overlap(player, scene.hidingSpots, () => {
-            player.isHiding = !player.isHiding;
-            player.alpha = player.isHiding ? 0.3 : 1;
-            player.nameTag.alpha = player.isHiding ? 0 : 1;
-            broadcast({ type: 'hide', id: myId, state: player.isHiding });
-        });
-    }
+ door=scene.physics.add.staticImage(760,300,"door")
+ door.visible=false
 }
 
-// --- P2P CORE ---
+function update(){
+ if(!player || !gameStarted) return
 
-function initPeer(callback) {
-    myName = document.getElementById('username').value || "Người chơi " + Math.floor(Math.random()*100);
-    peer = new Peer();
-    
-    peer.on('open', id => {
-        myId = id;
-        playerNames[id] = myName;
-        document.getElementById('setup-ui').classList.add('hidden');
-        document.getElementById('room-info').classList.remove('hidden');
-        spawnPlayer(id, true, myName);
-        if(callback) callback(id);
-    });
+ player.setVelocity(0)
 
-    peer.on('connection', conn => {
-        setupConn(conn);
-        connections.push(conn);
-    });
+ let speed = role==="ghost"?200:150
+
+ if(cursors.left.isDown) player.setVelocityX(-speed)
+ if(cursors.right.isDown) player.setVelocityX(speed)
+ if(cursors.up.isDown) player.setVelocityY(-speed)
+ if(cursors.down.isDown) player.setVelocityY(speed)
+
+ broadcast({type:"move",id:myId,x:player.x,y:player.y})
+
+ if(role==="ghost"){
+   Object.keys(players).forEach(id=>{
+     if(id!==myId && players[id].role==="human"){
+       if(Phaser.Math.Distance.Between(player.x,player.y,players[id].sprite.x,players[id].sprite.y)<25){
+         broadcast({type:"dead",id:id})
+       }
+     }
+   })
+ }
 }
 
-function createRoom() {
-    isHost = true;
-    initPeer(id => {
-        window.history.pushState({}, '', '#' + id);
-        navigator.clipboard.writeText(window.location.href);
-        document.getElementById('host-name').innerText = myName;
-        document.getElementById('start-btn').classList.remove('hidden');
-        updateUI();
-    });
+function spawnPlayer(id,color){
+ let sprite=scene.physics.add.sprite(400,300,"player")
+ sprite.setTint(color)
+ players[id]={sprite:sprite,color:color,role:"human"}
+ if(id===myId) player=sprite
 }
 
-function joinRoom(tid) {
-    isHost = false;
-    initPeer(id => {
-        const conn = peer.connect(tid);
-        setupConn(conn);
-        connections.push(conn);
-    });
+function createRoom(){
+ myName=document.getElementById("nameInput").value||"Player"
+ isHost=true
+ peer=new Peer()
+ peer.on("open",id=>{
+   myId=id
+   document.getElementById("info").innerText="Mã phòng: "+id
+   document.getElementById("startBtn").classList.remove("hidden")
+   spawnPlayer(id,Phaser.Display.Color.RandomRGB().color)
+ })
+ peer.on("connection",conn=>{
+   if(Object.keys(players).length>=MAX_PLAYERS){
+     conn.close()
+     return
+   }
+   setupConn(conn)
+   connections.push(conn)
+ })
 }
 
-function joinRoomManually() {
-    const tid = document.getElementById('roomIdInput').value;
-    if(tid) joinRoom(tid);
+function joinRoom(){
+ myName=document.getElementById("nameInput").value||"Player"
+ let room=document.getElementById("joinInput").value
+ peer=new Peer()
+ peer.on("open",id=>{
+   myId=id
+   let conn=peer.connect(room)
+   setupConn(conn)
+   connections.push(conn)
+ })
 }
 
-function setupConn(conn) {
-    conn.on('open', () => {
-        // Gửi tên của mình cho đối phương ngay khi kết nối
-        conn.send({ type: 'handshake', name: myName });
-    });
-
-    conn.on('data', data => {
-        if(data.type === 'handshake') {
-            playerNames[conn.peer] = data.name;
-            if(isHost) {
-                // Host gửi lại tên của mình cho Guest
-                conn.send({ type: 'handshake_reply', name: myName });
-            }
-            updateUI();
-        }
-        if(data.type === 'handshake_reply') {
-            playerNames[conn.peer] = data.name;
-            document.getElementById('host-name').innerText = data.name;
-            updateUI();
-        }
-        if(data.type === 'move') updateOther(data);
-        if(data.type === 'start') handleStart(data);
-        if(data.type === 'hide') {
-            if(otherPlayers[data.id]) {
-                otherPlayers[data.id].alpha = data.state ? 0.3 : 1;
-                otherPlayers[data.id].nameTag.alpha = data.state ? 0 : 1;
-            }
-        }
-    });
+function setupConn(conn){
+ conn.on("data",data=>{
+   if(data.type==="move"){
+     if(!players[data.id]) spawnPlayer(data.id,data.color||0xffffff)
+     players[data.id].sprite.setPosition(data.x,data.y)
+   }
+   if(data.type==="start") startMatch(data)
+   if(data.type==="spawn") spawnPlayer(data.id,data.color)
+   if(data.type==="dead" && data.id===myId){
+     alert("💀 Bạn đã chết!")
+     location.reload()
+   }
+   if(data.type==="destroy"){
+     destroyedTombs++
+     if(destroyedTombs>=REQUIRED_TOMBS){
+       door.visible=true
+     }
+   }
+ })
+ conn.on("open",()=>{
+   let color=Phaser.Display.Color.RandomRGB().color
+   spawnPlayer(myId,color)
+   conn.send({type:"spawn",id:myId,color:color})
+ })
 }
 
-function updateUI() {
-    const count = Object.keys(playerNames).length;
-    document.getElementById('player-count').innerText = count;
-    document.getElementById('player-list-names').innerText = "Danh sách: " + Object.values(playerNames).join(", ");
+function broadcast(data){
+ connections.forEach(c=>{ if(c.open)c.send(data) })
 }
 
-function broadcast(data) {
-    connections.forEach(c => { if(c.open) c.send(data); });
+function startGame(){
+ if(!isHost) return
+
+ let ids=[myId,...connections.map(c=>c.peer)]
+ let ghostId=ids[Math.floor(Math.random()*ids.length)]
+
+ let tombPos=[
+   {x:150,y:150},
+   {x:650,y:150},
+   {x:400,y:450}
+ ]
+
+ broadcast({type:"start",ghostId,tombPos})
+ startMatch({ghostId,tombPos})
 }
 
-// --- GAMEPLAY ---
+function startMatch(data){
+ gameStarted=true
+ document.getElementById("lobby").classList.add("hidden")
 
-function spawnPlayer(id, isMe, name) {
-    const p = scene.physics.add.sprite(400, 300, 'human');
-    p.setCollideWorldBounds(true);
-    scene.physics.add.collider(p, walls);
-    
-    // Thêm tag tên
-    p.nameTag = scene.add.text(400, 275, name, { fontSize: '12px', fill: '#0f0' }).setOrigin(0.5);
-    
-    if(isMe) player = p;
-    else otherPlayers[id] = p;
+ role=(myId===data.ghostId)?"ghost":"human"
+
+ if(role==="ghost"){
+   player.setTexture("ghost")
+ }
+
+ data.tombPos.forEach(p=>{
+   let t=tombstonesGroup.create(p.x,p.y,"tomb")
+   t.setInteractive()
+   t.on("pointerdown",()=>{
+     if(role==="human" && Phaser.Math.Distance.Between(player.x,player.y,p.x,p.y)<60){
+       t.destroy()
+       broadcast({type:"destroy"})
+     }
+   })
+ })
+
+ scene.physics.add.overlap(player,door,()=>{
+   if(role==="human" && destroyedTombs>=REQUIRED_TOMBS){
+     alert("🎉 Bạn thắng!")
+     location.reload()
+   }
+ })
 }
 
-function updateOther(data) {
-    if(!otherPlayers[data.id]) {
-        spawnPlayer(data.id, false, playerNames[data.id] || "Đang vào...");
-    }
-    otherPlayers[data.id].setPosition(data.x, data.y);
-    otherPlayers[data.id].nameTag.setPosition(data.x, data.y - 25);
-}
-
-function startGame() {
-    if(!isHost) return;
-    const all = [myId, ...connections.map(c => c.peer)];
-    const ghostId = all[Math.floor(Math.random() * all.length)];
-    const tPos = [{x:120,y:120}, {x:680,y:120}, {x:400,y:500}];
-    broadcast({ type: 'start', ghostId, tPos });
-    handleStart({ ghostId, tPos });
-}
-
-function handleStart(data) {
-    gameStarted = true;
-    document.getElementById('lobby').classList.add('hidden');
-    role = (myId === data.ghostId) ? 'ghost' : 'human';
-    player.setTexture(role);
-    player.nameTag.setColor(role === 'ghost' ? '#f00' : '#0f0');
-
-    data.tPos.forEach(p => {
-        let t = tombstones.create(p.x, p.y, 'tomb');
-        t.setInteractive().on('pointerdown', () => {
-            if(role === 'human' && Phaser.Math.Distance.Between(player.x, player.y, t.x, t.y) < 60) {
-                t.destroy();
-                // (Thêm logic đếm bia mộ nếu muốn)
-            }
-        });
-    });
-}
 </script>
 </body>
 </html>
