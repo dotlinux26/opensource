@@ -42,13 +42,11 @@ let game = new Phaser.Game(config);
 let scene, player, cursors, peer, myId;
 let otherPlayers = {}, tombstones = [], walls;
 let connections = [], isHost = false, role = 'human', gameStarted = false;
-let destroyedTombstones = 0, canEscape = false;
+let destroyedTombstones = 0;
 
 function preload() {
     scene = this;
     const graphics = this.make.graphics({ x: 0, y: 0, add: false });
-    
-    // Tạo textures đơn giản
     graphics.fillStyle(0x00ff00).fillRect(0, 0, 32, 32); graphics.generateTexture('human', 32, 32);
     graphics.clear().fillStyle(0xff0000).fillRect(0, 0, 32, 32); graphics.generateTexture('ghost', 32, 32);
     graphics.clear().fillStyle(0x555555).fillRect(0, 0, 40, 40); graphics.generateTexture('wall', 40, 40);
@@ -61,32 +59,28 @@ function create() {
     tombstones = this.physics.add.staticGroup();
     this.hidingSpots = this.physics.add.staticGroup();
 
-    // Tạo map đơn giản: Tường bao quanh
     for(let i=0; i<20; i++) {
         walls.create(i*40, 20, 'wall'); walls.create(i*40, 580, 'wall');
         walls.create(20, i*40, 'wall'); walls.create(780, i*40, 'wall');
     }
-    
-    // Gầm giường trốn
     this.hidingSpots.create(200, 200, 'bed');
     this.hidingSpots.create(600, 400, 'bed');
 
     cursors = this.input.keyboard.createCursorKeys();
     this.keyE = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
 
-    // Xử lý tự động vào phòng nếu có ID trên URL
+    // Tự động kiểm tra nếu link có sẵn ID (Hash)
     if(window.location.hash) {
-        const id = window.location.hash.substring(1);
-        document.getElementById('roomIdInput').value = id;
-        joinRoom(id);
+        const targetId = window.location.hash.substring(1);
+        document.getElementById('roomIdInput').value = targetId;
+        joinRoom(targetId);
     }
 }
 
 function update() {
     if (!player || !gameStarted) return;
-
     player.body.setVelocity(0);
-    if(player.isHiding) return; // Không cho di chuyển khi đang trốn
+    if(player.isHiding) return;
 
     const speed = (role === 'ghost') ? 220 : 160;
     if (cursors.left.isDown) player.body.setVelocityX(-speed);
@@ -94,10 +88,8 @@ function update() {
     if (cursors.up.isDown) player.body.setVelocityY(-speed);
     else if (cursors.down.isDown) player.body.setVelocityY(speed);
 
-    // Gửi tọa độ
     broadcast({ type: 'move', id: myId, x: player.x, y: player.y });
 
-    // Logic trốn (nhấn E gần giường)
     if (Phaser.Input.Keyboard.JustDown(this.keyE)) {
         scene.physics.overlap(player, scene.hidingSpots, () => {
             player.isHiding = !player.isHiding;
@@ -107,55 +99,77 @@ function update() {
     }
 }
 
-// --- MẠNG P2P ---
-function initPeer() {
-    peer = new Peer();
+// --- LOGIC MẠNG P2P ĐÃ FIX ---
+
+function initPeer(callback) {
+    peer = new Peer(); 
     peer.on('open', id => {
         myId = id;
         document.getElementById('display-id').innerText = id;
         document.getElementById('setup-ui').classList.add('hidden');
         document.getElementById('room-info').classList.remove('hidden');
+        spawnPlayer(id, true);
+        if(callback) callback(id);
+    });
+
+    peer.on('connection', conn => {
+        connections.push(conn);
+        setupConn(conn);
+        // Host gửi lời chào và cập nhật số người chơi
+        updatePlayerCount();
     });
 }
 
 function createRoom() {
     isHost = true;
-    initPeer();
-    peer.on('open', id => {
+    initPeer(id => {
         const url = window.location.origin + window.location.pathname + '#' + id;
+        window.history.pushState({}, '', '#' + id);
         navigator.clipboard.writeText(url);
-        alert("Đã copy link phòng vào bộ nhớ tạm! Gửi cho bạn bè nhé.");
-        spawnPlayer(id, true);
+        alert("Đã copy link phòng! Gửi cho bạn bè để họ vào thẳng luôn.");
         document.getElementById('start-btn').classList.remove('hidden');
     });
-    peer.on('connection', conn => {
+}
+
+function joinRoom(targetId) {
+    isHost = false;
+    initPeer(myNewId => {
+        const conn = peer.connect(targetId);
         connections.push(conn);
         setupConn(conn);
     });
 }
 
-function joinRoom(id) {
-    initPeer();
-    peer.on('open', myNewId => {
-        const conn = peer.connect(id);
-        connections.push(conn);
-        setupConn(conn);
-        spawnPlayer(myNewId, true);
-    });
+function joinRoomManually() {
+    const id = document.getElementById('roomIdInput').value;
+    if(id) joinRoom(id);
 }
-
-function joinRoomManually() { joinRoom(document.getElementById('roomIdInput').value); }
 
 function setupConn(conn) {
     conn.on('data', data => {
         if(data.type === 'move') updateOther(data);
         if(data.type === 'start') handleStart(data);
-        if(data.type === 'hide') { if(otherPlayers[data.id]) otherPlayers[data.id].alpha = data.state ? 0 : 1; }
+        if(data.type === 'hide') { if(otherPlayers[data.id]) otherPlayers[data.id].alpha = data.state ? 0.3 : 1; }
         if(data.type === 'tomb_broken') { destroyedTombstones++; checkWinCondition(); }
+    });
+    
+    conn.on('open', () => {
+        updatePlayerCount();
+        if(!isHost) broadcast({type: 'request_sync'}); // Guest yêu cầu đồng bộ
     });
 }
 
-function broadcast(data) { connections.forEach(c => c.open && c.send(data)); }
+function updatePlayerCount() {
+    document.getElementById('player-count').innerText = connections.length + 1;
+}
+
+function broadcast(data) {
+    connections.forEach(c => {
+        if (c.open) c.send(data);
+    });
+}
+
+// --- CÁC HÀM GAMEPLAY ---
 
 function spawnPlayer(id, isMe, isGhost = false) {
     const p = scene.physics.add.sprite(400, 300, isGhost ? 'ghost' : 'human');
@@ -172,10 +186,10 @@ function updateOther(data) {
 
 function startGame() {
     if(!isHost) return;
-    const ghostId = connections.length > 0 ? connections[Math.floor(Math.random()*connections.length)].peer : myId;
-    
-    // Tạo 3 bia mộ ngẫu nhiên
-    const tPos = [{x:100,y:100}, {x:700,y:100}, {x:400,y:500}];
+    // Chọn ngẫu nhiên 1 người làm quỷ (có thể là Host hoặc Guest)
+    const allIds = [myId, ...connections.map(c => c.peer)];
+    const ghostId = allIds[Math.floor(Math.random() * allIds.length)];
+    const tPos = [{x:120,y:120}, {x:680,y:120}, {x:400,y:500}];
     
     const startData = { type: 'start', ghostId, tPos };
     broadcast(startData);
@@ -200,10 +214,12 @@ function handleStart(data) {
         });
     });
 
-    // Va chạm quỷ bắt người
     if(role === 'ghost') {
         scene.physics.add.overlap(player, Object.values(otherPlayers), (me, target) => {
-            if(target.alpha > 0.5) alert("BẠN ĐÃ BẮT ĐƯỢC NGƯỜI!");
+            if(target.alpha > 0.5) {
+                alert("BẠN ĐÃ BẮT ĐƯỢC NGƯỜI!");
+                // Có thể thêm logic kết thúc game ở đây
+            }
         });
     }
 }
