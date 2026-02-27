@@ -2,14 +2,14 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Juna Horror - Full Ready System</title>
+<title>Juna Horror - Final Stable</title>
 
 <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
 <style>
 body { margin:0; background:#000; color:#0f0; font-family:monospace; overflow:hidden;}
-.ui { position:absolute; top:10px; left:10px; background:#111; padding:15px; border:1px solid #0f0; z-index:10; width:250px;}
+.ui { position:absolute; top:10px; left:10px; background:#111; padding:15px; border:1px solid #0f0; z-index:10; width:260px;}
 button,input{ background:#000; color:#0f0; border:1px solid #0f0; padding:5px; margin:3px; width:95%;}
 .hidden{ display:none; }
 </style>
@@ -33,7 +33,6 @@ button,input{ background:#000; color:#0f0; border:1px solid #0f0; padding:5px; m
 <script>
 
 const MAX_PLAYERS = 5
-const REQUIRED_TOMBS = 3
 
 let config = {
  type: Phaser.AUTO,
@@ -44,17 +43,16 @@ let config = {
 }
 
 let game = new Phaser.Game(config)
-let scene, player, cursors
+
+let scene, cursors
 let peer, myId, myName
 let connections=[]
 let players={}
+let playersMeta={}
 let readyState={}
-let myReady=false
-let tombstonesGroup, door
-let destroyedTombs = 0
-let role="human"
-let gameStarted=false
 let isHost=false
+let gameStarted=false
+let role="human"
 
 function preload(){
  scene=this
@@ -65,62 +63,66 @@ function preload(){
  g.clear()
  g.fillStyle(0xff0000).fillRect(0,0,32,32)
  g.generateTexture("ghost",32,32)
- g.clear()
- g.fillStyle(0x888888).fillRect(0,0,40,40)
- g.generateTexture("wall",40,40)
- g.clear()
- g.fillStyle(0xaaaaaa).fillCircle(16,16,12)
- g.generateTexture("tomb",32,32)
- g.clear()
- g.fillStyle(0x00ffff).fillRect(0,0,40,60)
- g.generateTexture("door",40,60)
 }
 
 function create(){
  cursors=this.input.keyboard.createCursorKeys()
- tombstonesGroup=this.physics.add.staticGroup()
-
- for(let i=0;i<20;i++){
-   scene.physics.add.staticImage(i*40,20,"wall")
-   scene.physics.add.staticImage(i*40,580,"wall")
-   scene.physics.add.staticImage(20,i*40,"wall")
-   scene.physics.add.staticImage(780,i*40,"wall")
- }
-
- door=scene.physics.add.staticImage(760,300,"door")
- door.visible=false
 }
 
 function update(){
- if(!player || !gameStarted) return
+ if(!gameStarted) return
 
- player.setVelocity(0)
+ let me=players[myId]
+ if(!me) return
+
+ me.sprite.setVelocity(0)
+
  let speed = role==="ghost"?200:150
 
- if(cursors.left.isDown) player.setVelocityX(-speed)
- if(cursors.right.isDown) player.setVelocityX(speed)
- if(cursors.up.isDown) player.setVelocityY(-speed)
- if(cursors.down.isDown) player.setVelocityY(speed)
+ if(cursors.left.isDown) me.sprite.setVelocityX(-speed)
+ if(cursors.right.isDown) me.sprite.setVelocityX(speed)
+ if(cursors.up.isDown) me.sprite.setVelocityY(-speed)
+ if(cursors.down.isDown) me.sprite.setVelocityY(speed)
 
- broadcast({type:"move",id:myId,x:player.x,y:player.y})
+ broadcast({type:"move",id:myId,x:me.sprite.x,y:me.sprite.y})
+
+ me.nameText.setPosition(me.sprite.x,me.sprite.y-25)
 
  if(role==="ghost"){
    Object.keys(players).forEach(id=>{
      if(id!==myId && players[id].role==="human"){
-       if(Phaser.Math.Distance.Between(player.x,player.y,players[id].sprite.x,players[id].sprite.y)<25){
-         broadcast({type:"dead",id:id})
+       let a=me.sprite
+       let b=players[id].sprite
+       if(Phaser.Math.Distance.Between(a.x,a.y,b.x,b.y)<25){
+         broadcast({type:"dead",id})
        }
      }
    })
  }
 }
 
-function spawnPlayer(id,color){
- let sprite=scene.physics.add.sprite(400,300,"player")
+function randomSpawn(){
+ return {
+   x:Phaser.Math.Between(100,700),
+   y:Phaser.Math.Between(100,500)
+ }
+}
+
+function spawnPlayer(id,name,color,x,y){
+ if(players[id]) return
+
+ let sprite=scene.physics.add.sprite(x,y,"player")
  sprite.setTint(color)
- players[id]={sprite:sprite,color:color,role:"human"}
+
+ let nameText=scene.add.text(x,y-25,name,{
+   fontSize:"12px",
+   color:"#0f0"
+ }).setOrigin(0.5)
+
+ players[id]={sprite,nameText,role:"human"}
+ playersMeta[id]={name,color,x,y}
  readyState[id]=false
- if(id===myId) player=sprite
+
  updateLobbyUI()
 }
 
@@ -128,77 +130,117 @@ function createRoom(){
  myName=document.getElementById("nameInput").value||"Player"
  isHost=true
  peer=new Peer()
+
  peer.on("open",id=>{
    myId=id
    document.getElementById("info").innerText="Mã phòng: "+id
    document.getElementById("readyBtn").classList.remove("hidden")
    document.getElementById("startBtn").classList.remove("hidden")
-   spawnPlayer(id,Phaser.Display.Color.RandomRGB().color)
+
+   let pos=randomSpawn()
+   let color=Phaser.Display.Color.RandomRGB().color
+   spawnPlayer(id,myName,color,pos.x,pos.y)
  })
+
  peer.on("connection",conn=>{
    if(Object.keys(players).length>=MAX_PLAYERS){
      conn.close()
      return
    }
+
    setupConn(conn)
    connections.push(conn)
+
+   conn.on("open",()=>{
+     conn.send({type:"sync",playersMeta,readyState})
+   })
  })
 }
 
 function joinRoom(){
  myName=document.getElementById("nameInput").value||"Player"
  let room=document.getElementById("joinInput").value
+
  peer=new Peer()
+
  peer.on("open",id=>{
    myId=id
    let conn=peer.connect(room)
    setupConn(conn)
    connections.push(conn)
    document.getElementById("readyBtn").classList.remove("hidden")
- })
+  })
 }
 
 function setupConn(conn){
+
  conn.on("data",data=>{
+
+   if(data.type==="sync"){
+     Object.keys(data.playersMeta).forEach(id=>{
+       let p=data.playersMeta[id]
+       spawnPlayer(id,p.name,p.color,p.x,p.y)
+     })
+     readyState=data.readyState||{}
+     updateLobbyUI()
+   }
+
+   if(data.type==="newPlayer" && isHost){
+     spawnPlayer(data.id,data.name,data.color,data.x,data.y)
+     broadcast(data)
+   }
+
    if(data.type==="spawn"){
-     if(!players[data.id]) spawnPlayer(data.id,data.color)
+     spawnPlayer(data.id,data.name,data.color,data.x,data.y)
    }
 
    if(data.type==="move"){
-     if(players[data.id])
+     if(players[data.id]){
        players[data.id].sprite.setPosition(data.x,data.y)
+       players[data.id].nameText.setPosition(data.x,data.y-25)
+     }
    }
 
    if(data.type==="ready"){
      readyState[data.id]=data.state
+     broadcast(data)
      updateLobbyUI()
    }
 
-   if(data.type==="start") startMatch(data)
+   if(data.type==="start"){
+     startMatch(data.ghostId)
+   }
 
    if(data.type==="dead" && data.id===myId){
      alert("💀 Bạn đã chết!")
      location.reload()
    }
 
-   if(data.type==="destroy"){
-     destroyedTombs++
-     if(destroyedTombs>=REQUIRED_TOMBS)
-       door.visible=true
-   }
  })
 
  conn.on("open",()=>{
-   let color=Phaser.Display.Color.RandomRGB().color
-   spawnPlayer(myId,color)
-   conn.send({type:"spawn",id:myId,color:color})
+   if(!isHost){
+     let pos=randomSpawn()
+     let color=Phaser.Display.Color.RandomRGB().color
+
+     spawnPlayer(myId,myName,color,pos.x,pos.y)
+
+     conn.send({
+       type:"newPlayer",
+       id:myId,
+       name:myName,
+       color,
+       x:pos.x,
+       y:pos.y
+     })
+   }
  })
+
 }
 
 function toggleReady(){
- myReady=!myReady
- readyState[myId]=myReady
- broadcast({type:"ready",id:myId,state:myReady})
+ readyState[myId]=!readyState[myId]
+ broadcast({type:"ready",id:myId,state:readyState[myId]})
  updateLobbyUI()
 }
 
@@ -206,13 +248,13 @@ function updateLobbyUI(){
  let html=""
  Object.keys(players).forEach(id=>{
    let status=readyState[id]?"🟢 Ready":"🔴 Not Ready"
-   html+=id.substring(0,6)+" - "+status+"<br>"
+   html+=playersMeta[id].name+" - "+status+"<br>"
  })
  document.getElementById("playerList").innerHTML=html
 
  if(isHost){
-   let values=Object.values(readyState)
-   let allReady=values.length>=2 && values.every(v=>v===true)
+   let vals=Object.values(readyState)
+   let allReady=vals.length>=2 && vals.every(v=>v)
    document.getElementById("startBtn").disabled=!allReady
  }
 }
@@ -223,51 +265,30 @@ function broadcast(data){
 
 function startGame(){
  if(!isHost) return
- let values=Object.values(readyState)
- if(values.length<2 || !values.every(v=>v===true)){
+
+ let vals=Object.values(readyState)
+ if(vals.length<2 || !vals.every(v=>v)){
    alert("Chưa đủ người hoặc chưa tất cả READY!")
    return
  }
 
- let ids=[myId,...connections.map(c=>c.peer)]
+ let ids=Object.keys(players)
  let ghostId=ids[Math.floor(Math.random()*ids.length)]
 
- let tombPos=[
-   {x:150,y:150},
-   {x:650,y:150},
-   {x:400,y:450}
- ]
-
- broadcast({type:"start",ghostId,tombPos})
- startMatch({ghostId,tombPos})
+ broadcast({type:"start",ghostId})
+ startMatch(ghostId)
 }
 
-function startMatch(data){
+function startMatch(ghostId){
  gameStarted=true
  document.getElementById("lobby").classList.add("hidden")
 
- role=(myId===data.ghostId)?"ghost":"human"
+ role=(myId===ghostId)?"ghost":"human"
  players[myId].role=role
 
- if(role==="ghost") player.setTexture("ghost")
-
- data.tombPos.forEach(p=>{
-   let t=tombstonesGroup.create(p.x,p.y,"tomb")
-   t.setInteractive()
-   t.on("pointerdown",()=>{
-     if(role==="human" && Phaser.Math.Distance.Between(player.x,player.y,p.x,p.y)<60){
-       t.destroy()
-       broadcast({type:"destroy"})
-     }
-   })
- })
-
- scene.physics.add.overlap(player,door,()=>{
-   if(role==="human" && destroyedTombs>=REQUIRED_TOMBS){
-     alert("🎉 Bạn thắng!")
-     location.reload()
-   }
- })
+ if(role==="ghost"){
+   players[myId].sprite.setTexture("ghost")
+ }
 }
 
 </script>
