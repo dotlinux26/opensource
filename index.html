@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Juna Horror - Final Stable</title>
+<title>Juna Horror - FINAL CLEAN BUILD</title>
 
 <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
@@ -120,14 +120,20 @@ function spawnPlayer(id,name,color,x,y){
  }).setOrigin(0.5)
 
  players[id]={sprite,nameText,role:"human"}
- playersMeta[id]={name,color,x,y}
- readyState[id]=false
+
+ if(!playersMeta[id]){
+   playersMeta[id]={name,color,x,y}
+ }
+
+ if(!(id in readyState)){
+   readyState[id]=false
+ }
 
  updateLobbyUI()
 }
 
 function createRoom(){
- myName=document.getElementById("nameInput").value||"Player"
+ myName=document.getElementById("nameInput").value.trim() || "Player"
  isHost=true
  peer=new Peer()
 
@@ -139,11 +145,15 @@ function createRoom(){
 
    let pos=randomSpawn()
    let color=Phaser.Display.Color.RandomRGB().color
+
+   playersMeta[id]={name:myName,color,x:pos.x,y:pos.y}
+   readyState[id]=false
+
    spawnPlayer(id,myName,color,pos.x,pos.y)
  })
 
  peer.on("connection",conn=>{
-   if(Object.keys(players).length>=MAX_PLAYERS){
+   if(Object.keys(playersMeta).length>=MAX_PLAYERS){
      conn.close()
      return
    }
@@ -152,14 +162,18 @@ function createRoom(){
    connections.push(conn)
 
    conn.on("open",()=>{
-     conn.send({type:"sync",playersMeta,readyState})
+     conn.send({
+       type:"sync",
+       playersMeta,
+       readyState
+     })
    })
  })
 }
 
 function joinRoom(){
- myName=document.getElementById("nameInput").value||"Player"
- let room=document.getElementById("joinInput").value
+ myName=document.getElementById("nameInput").value.trim() || "Player"
+ let room=document.getElementById("joinInput").value.trim()
 
  peer=new Peer()
 
@@ -169,7 +183,7 @@ function joinRoom(){
    setupConn(conn)
    connections.push(conn)
    document.getElementById("readyBtn").classList.remove("hidden")
-  })
+ })
 }
 
 function setupConn(conn){
@@ -177,17 +191,36 @@ function setupConn(conn){
  conn.on("data",data=>{
 
    if(data.type==="sync"){
-     Object.keys(data.playersMeta).forEach(id=>{
-       let p=data.playersMeta[id]
+     playersMeta=data.playersMeta || {}
+     readyState=data.readyState || {}
+
+     Object.keys(playersMeta).forEach(id=>{
+       let p=playersMeta[id]
        spawnPlayer(id,p.name,p.color,p.x,p.y)
      })
-     readyState=data.readyState||{}
-     updateLobbyUI()
    }
 
    if(data.type==="newPlayer" && isHost){
-     spawnPlayer(data.id,data.name,data.color,data.x,data.y)
-     broadcast(data)
+
+     playersMeta[data.id]={
+       name:data.name,
+       color:data.color,
+       x:data.x,
+       y:data.y
+     }
+
+     readyState[data.id]=false
+
+     broadcast({
+       type:"spawn",
+       id:data.id,
+       name:data.name,
+       color:data.color,
+       x:data.x,
+       y:data.y
+     })
+
+     updateLobbyUI()
    }
 
    if(data.type==="spawn"){
@@ -220,10 +253,9 @@ function setupConn(conn){
 
  conn.on("open",()=>{
    if(!isHost){
+
      let pos=randomSpawn()
      let color=Phaser.Display.Color.RandomRGB().color
-
-     spawnPlayer(myId,myName,color,pos.x,pos.y)
 
      conn.send({
        type:"newPlayer",
@@ -235,7 +267,6 @@ function setupConn(conn){
      })
    }
  })
-
 }
 
 function toggleReady(){
@@ -246,10 +277,12 @@ function toggleReady(){
 
 function updateLobbyUI(){
  let html=""
- Object.keys(players).forEach(id=>{
+
+ Object.keys(playersMeta).forEach(id=>{
    let status=readyState[id]?"🟢 Ready":"🔴 Not Ready"
    html+=playersMeta[id].name+" - "+status+"<br>"
  })
+
  document.getElementById("playerList").innerHTML=html
 
  if(isHost){
@@ -272,7 +305,7 @@ function startGame(){
    return
  }
 
- let ids=Object.keys(players)
+ let ids=Object.keys(playersMeta)
  let ghostId=ids[Math.floor(Math.random()*ids.length)]
 
  broadcast({type:"start",ghostId})
@@ -284,10 +317,12 @@ function startMatch(ghostId){
  document.getElementById("lobby").classList.add("hidden")
 
  role=(myId===ghostId)?"ghost":"human"
- players[myId].role=role
 
- if(role==="ghost"){
-   players[myId].sprite.setTexture("ghost")
+ if(players[myId]){
+   players[myId].role=role
+   if(role==="ghost"){
+     players[myId].sprite.setTexture("ghost")
+   }
  }
 }
 
