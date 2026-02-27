@@ -6,30 +6,36 @@
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         body { margin: 0; background: #000; color: #0f0; font-family: 'Courier New', monospace; overflow: hidden; display: flex; flex-direction: column; align-items: center; }
-        .ui-overlay { position: absolute; top: 10px; z-index: 10; background: rgba(0,0,0,0.8); padding: 10px; border: 1px solid #0f0; pointer-events: auto; }
-        canvas { border: 2px solid #333; cursor: crosshair; }
-        #status { color: #f00; font-weight: bold; }
-        .btn { background: #000; color: #0f0; border: 1px solid #0f0; padding: 5px 10px; cursor: pointer; }
+        .ui-overlay { position: absolute; top: 10px; z-index: 10; background: rgba(0,0,0,0.8); padding: 15px; border: 1px solid #0f0; width: 400px; }
+        canvas { border: 2px solid #333; }
+        .btn { background: #000; color: #0f0; border: 1px solid #0f0; padding: 8px; cursor: pointer; width: 100%; margin-top: 5px; }
         .hidden { display: none; }
+        #game-status { font-size: 12px; margin-top: 10px; color: #fff; }
     </style>
 </head>
 <body>
 
 <div class="ui-overlay" id="lobby">
     <div id="setup-ui">
-        <input type="text" id="username" placeholder="Tên của bạn..." class="btn">
-        <button onclick="createRoom()" class="btn">Tạo Phòng & Copy Link</button>
-        <p>Hoặc dán ID để vào: <input type="text" id="roomIdInput" class="btn"><button onclick="joinRoomManually()" class="btn">Vào</button></p>
+        <input type="text" id="username" placeholder="Nhập tên của bạn..." class="btn" style="width: 95%;">
+        <button onclick="createRoom()" class="btn">TẠO PHÒNG & COPY LINK</button>
+        <p style="text-align: center; margin: 10px 0;">- HOẶC -</p>
+        <input type="text" id="roomIdInput" placeholder="Dán mã phòng..." class="btn" style="width: 95%;">
+        <button onclick="joinRoomManually()" class="btn">VÀO PHÒNG</button>
     </div>
+    
     <div id="room-info" class="hidden">
-        Mã phòng: <span id="display-id">...</span> | Người chơi: <span id="player-count">1</span>/5
-        <button id="start-btn" onclick="startGame()" class="btn hidden">BẮT ĐẦU GAME</button>
+        <div style="border-bottom: 1px solid #0f0; padding-bottom: 5px; margin-bottom: 5px;">
+            PHÒNG CỦA: <span id="host-name" style="color: yellow;">...</span>
+        </div>
+        Người chơi: <span id="player-count">1</span>/5
+        <div id="player-list-names" style="font-size: 11px; color: #888; margin: 5px 0;"></div>
+        <button id="start-btn" onclick="startGame()" class="btn hidden" style="background: #050;">BẮT ĐẦU GAME</button>
     </div>
-    <div id="game-status"></div>
+    <div id="game-status">Đang chờ người chơi...</div>
 </div>
 
 <script>
-// --- CONFIG GAME ---
 const config = {
     type: Phaser.AUTO,
     width: 800,
@@ -39,19 +45,19 @@ const config = {
 };
 
 let game = new Phaser.Game(config);
-let scene, player, cursors, peer, myId;
+let scene, player, cursors, peer, myId, myName;
 let otherPlayers = {}, tombstones = [], walls;
 let connections = [], isHost = false, role = 'human', gameStarted = false;
-let destroyedTombstones = 0;
+let playerNames = {}; // Lưu trữ { peerId: Name }
 
 function preload() {
     scene = this;
-    const graphics = this.make.graphics({ x: 0, y: 0, add: false });
-    graphics.fillStyle(0x00ff00).fillRect(0, 0, 32, 32); graphics.generateTexture('human', 32, 32);
-    graphics.clear().fillStyle(0xff0000).fillRect(0, 0, 32, 32); graphics.generateTexture('ghost', 32, 32);
-    graphics.clear().fillStyle(0x555555).fillRect(0, 0, 40, 40); graphics.generateTexture('wall', 40, 40);
-    graphics.clear().fillStyle(0xffffff).fillCircle(16, 16, 10); graphics.generateTexture('tomb', 32, 32);
-    graphics.clear().fillStyle(0x442200).fillRect(0,0, 60, 30); graphics.generateTexture('bed', 60, 30);
+    const g = this.make.graphics({ x: 0, y: 0, add: false });
+    g.fillStyle(0x00ff00).fillRect(0, 0, 32, 32); g.generateTexture('human', 32, 32);
+    g.clear().fillStyle(0xff0000).fillRect(0, 0, 32, 32); g.generateTexture('ghost', 32, 32);
+    g.clear().fillStyle(0x555555).fillRect(0, 0, 40, 40); g.generateTexture('wall', 40, 40);
+    g.clear().fillStyle(0xffffff).fillCircle(16, 16, 10); g.generateTexture('tomb', 32, 32);
+    g.clear().fillStyle(0x442200).fillRect(0,0, 60, 30); g.generateTexture('bed', 60, 30);
 }
 
 function create() {
@@ -69,11 +75,11 @@ function create() {
     cursors = this.input.keyboard.createCursorKeys();
     this.keyE = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
 
-    // Tự động kiểm tra nếu link có sẵn ID (Hash)
     if(window.location.hash) {
-        const targetId = window.location.hash.substring(1);
-        document.getElementById('roomIdInput').value = targetId;
-        joinRoom(targetId);
+        const tid = window.location.hash.substring(1);
+        document.getElementById('roomIdInput').value = tid;
+        // Đợi Phaser khởi tạo xong
+        setTimeout(() => { if(!peer) joinRoom(tid); }, 500);
     }
 }
 
@@ -88,112 +94,137 @@ function update() {
     if (cursors.up.isDown) player.body.setVelocityY(-speed);
     else if (cursors.down.isDown) player.body.setVelocityY(speed);
 
-    broadcast({ type: 'move', id: myId, x: player.x, y: player.y });
+    if(player.body.velocity.x !== 0 || player.body.velocity.y !== 0) {
+        broadcast({ type: 'move', id: myId, x: player.x, y: player.y });
+        player.nameTag.setPosition(player.x, player.y - 25);
+    }
 
     if (Phaser.Input.Keyboard.JustDown(this.keyE)) {
         scene.physics.overlap(player, scene.hidingSpots, () => {
             player.isHiding = !player.isHiding;
             player.alpha = player.isHiding ? 0.3 : 1;
+            player.nameTag.alpha = player.isHiding ? 0 : 1;
             broadcast({ type: 'hide', id: myId, state: player.isHiding });
         });
     }
 }
 
-// --- LOGIC MẠNG P2P ĐÃ FIX ---
+// --- P2P CORE ---
 
 function initPeer(callback) {
-    peer = new Peer(); 
+    myName = document.getElementById('username').value || "Người chơi " + Math.floor(Math.random()*100);
+    peer = new Peer();
+    
     peer.on('open', id => {
         myId = id;
-        document.getElementById('display-id').innerText = id;
+        playerNames[id] = myName;
         document.getElementById('setup-ui').classList.add('hidden');
         document.getElementById('room-info').classList.remove('hidden');
-        spawnPlayer(id, true);
+        spawnPlayer(id, true, myName);
         if(callback) callback(id);
     });
 
     peer.on('connection', conn => {
-        connections.push(conn);
         setupConn(conn);
-        // Host gửi lời chào và cập nhật số người chơi
-        updatePlayerCount();
+        connections.push(conn);
     });
 }
 
 function createRoom() {
     isHost = true;
     initPeer(id => {
-        const url = window.location.origin + window.location.pathname + '#' + id;
         window.history.pushState({}, '', '#' + id);
-        navigator.clipboard.writeText(url);
-        alert("Đã copy link phòng! Gửi cho bạn bè để họ vào thẳng luôn.");
+        navigator.clipboard.writeText(window.location.href);
+        document.getElementById('host-name').innerText = myName;
         document.getElementById('start-btn').classList.remove('hidden');
+        updateUI();
     });
 }
 
-function joinRoom(targetId) {
+function joinRoom(tid) {
     isHost = false;
-    initPeer(myNewId => {
-        const conn = peer.connect(targetId);
-        connections.push(conn);
+    initPeer(id => {
+        const conn = peer.connect(tid);
         setupConn(conn);
+        connections.push(conn);
     });
 }
 
 function joinRoomManually() {
-    const id = document.getElementById('roomIdInput').value;
-    if(id) joinRoom(id);
+    const tid = document.getElementById('roomIdInput').value;
+    if(tid) joinRoom(tid);
 }
 
 function setupConn(conn) {
+    conn.on('open', () => {
+        // Gửi tên của mình cho đối phương ngay khi kết nối
+        conn.send({ type: 'handshake', name: myName });
+    });
+
     conn.on('data', data => {
+        if(data.type === 'handshake') {
+            playerNames[conn.peer] = data.name;
+            if(isHost) {
+                // Host gửi lại tên của mình cho Guest
+                conn.send({ type: 'handshake_reply', name: myName });
+            }
+            updateUI();
+        }
+        if(data.type === 'handshake_reply') {
+            playerNames[conn.peer] = data.name;
+            document.getElementById('host-name').innerText = data.name;
+            updateUI();
+        }
         if(data.type === 'move') updateOther(data);
         if(data.type === 'start') handleStart(data);
-        if(data.type === 'hide') { if(otherPlayers[data.id]) otherPlayers[data.id].alpha = data.state ? 0.3 : 1; }
-        if(data.type === 'tomb_broken') { destroyedTombstones++; checkWinCondition(); }
-    });
-    
-    conn.on('open', () => {
-        updatePlayerCount();
-        if(!isHost) broadcast({type: 'request_sync'}); // Guest yêu cầu đồng bộ
+        if(data.type === 'hide') {
+            if(otherPlayers[data.id]) {
+                otherPlayers[data.id].alpha = data.state ? 0.3 : 1;
+                otherPlayers[data.id].nameTag.alpha = data.state ? 0 : 1;
+            }
+        }
     });
 }
 
-function updatePlayerCount() {
-    document.getElementById('player-count').innerText = connections.length + 1;
+function updateUI() {
+    const count = Object.keys(playerNames).length;
+    document.getElementById('player-count').innerText = count;
+    document.getElementById('player-list-names').innerText = "Danh sách: " + Object.values(playerNames).join(", ");
 }
 
 function broadcast(data) {
-    connections.forEach(c => {
-        if (c.open) c.send(data);
-    });
+    connections.forEach(c => { if(c.open) c.send(data); });
 }
 
-// --- CÁC HÀM GAMEPLAY ---
+// --- GAMEPLAY ---
 
-function spawnPlayer(id, isMe, isGhost = false) {
-    const p = scene.physics.add.sprite(400, 300, isGhost ? 'ghost' : 'human');
+function spawnPlayer(id, isMe, name) {
+    const p = scene.physics.add.sprite(400, 300, 'human');
     p.setCollideWorldBounds(true);
     scene.physics.add.collider(p, walls);
+    
+    // Thêm tag tên
+    p.nameTag = scene.add.text(400, 275, name, { fontSize: '12px', fill: '#0f0' }).setOrigin(0.5);
+    
     if(isMe) player = p;
     else otherPlayers[id] = p;
 }
 
 function updateOther(data) {
-    if(!otherPlayers[data.id]) spawnPlayer(data.id, false);
+    if(!otherPlayers[data.id]) {
+        spawnPlayer(data.id, false, playerNames[data.id] || "Đang vào...");
+    }
     otherPlayers[data.id].setPosition(data.x, data.y);
+    otherPlayers[data.id].nameTag.setPosition(data.x, data.y - 25);
 }
 
 function startGame() {
     if(!isHost) return;
-    // Chọn ngẫu nhiên 1 người làm quỷ (có thể là Host hoặc Guest)
-    const allIds = [myId, ...connections.map(c => c.peer)];
-    const ghostId = allIds[Math.floor(Math.random() * allIds.length)];
+    const all = [myId, ...connections.map(c => c.peer)];
+    const ghostId = all[Math.floor(Math.random() * all.length)];
     const tPos = [{x:120,y:120}, {x:680,y:120}, {x:400,y:500}];
-    
-    const startData = { type: 'start', ghostId, tPos };
-    broadcast(startData);
-    handleStart(startData);
+    broadcast({ type: 'start', ghostId, tPos });
+    handleStart({ ghostId, tPos });
 }
 
 function handleStart(data) {
@@ -201,33 +232,17 @@ function handleStart(data) {
     document.getElementById('lobby').classList.add('hidden');
     role = (myId === data.ghostId) ? 'ghost' : 'human';
     player.setTexture(role);
-    
+    player.nameTag.setColor(role === 'ghost' ? '#f00' : '#0f0');
+
     data.tPos.forEach(p => {
         let t = tombstones.create(p.x, p.y, 'tomb');
         t.setInteractive().on('pointerdown', () => {
             if(role === 'human' && Phaser.Math.Distance.Between(player.x, player.y, t.x, t.y) < 60) {
                 t.destroy();
-                broadcast({type: 'tomb_broken'});
-                destroyedTombstones++;
-                checkWinCondition();
+                // (Thêm logic đếm bia mộ nếu muốn)
             }
         });
     });
-
-    if(role === 'ghost') {
-        scene.physics.add.overlap(player, Object.values(otherPlayers), (me, target) => {
-            if(target.alpha > 0.5) {
-                alert("BẠN ĐÃ BẮT ĐƯỢC NGƯỜI!");
-                // Có thể thêm logic kết thúc game ở đây
-            }
-        });
-    }
-}
-
-function checkWinCondition() {
-    if(destroyedTombstones >= 3) {
-        document.getElementById('game-status').innerText = "CỬA ĐÃ MỞ! CHẠY ĐI!";
-    }
 }
 </script>
 </body>
