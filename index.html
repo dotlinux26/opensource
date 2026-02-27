@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Juna Horror - Final Fix</title>
+    <title>Juna Horror - Physics & X-Kill Build</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
@@ -30,16 +30,17 @@
 
 <div id="chatBox">
     <div id="chatMessages"></div>
-    <input id="chatInput" placeholder="Nhập chat...">
+    <input id="chatInput" placeholder="Nhập chat (X để giết)...">
 </div>
 
 <script>
 const MAX_PLAYERS = 5;
-let config = { type: Phaser.AUTO, width: 800, height: 600, physics: { default:'arcade' }, scene: { preload, create, update } };
+let config = { type: Phaser.AUTO, width: 800, height: 600, physics: { default:'arcade', arcade: { debug: false } }, scene: { preload, create, update } };
 let game = new Phaser.Game(config);
 
-let scene, cursors, peer, myId, myName;
+let scene, cursors, keyX, peer, myId, myName;
 let connections=[], players={}, playersMeta={}, readyState={}, aliveState={}, isHost=false, gameStarted=false, role="human";
+let playerGroup;
 
 function preload(){
     scene=this;
@@ -48,33 +49,47 @@ function preload(){
     g.clear().fillStyle(0xff0000).fillRect(0,0,32,32); g.generateTexture("ghost",32,32);
 }
 
-function create(){ cursors=this.input.keyboard.createCursorKeys(); }
+function create(){ 
+    cursors = this.input.keyboard.createCursorKeys();
+    keyX = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.X);
+    playerGroup = this.physics.add.group({ bounceX: 0.5, bounceY: 0.5 });
+}
 
 function update(){
     if(!players[myId] || !aliveState[myId]) return;
-    let me=players[myId];
+    let me = players[myId];
     me.sprite.setVelocity(0);
-    let speed = !gameStarted ? 100 : (role==="ghost"?210:155);
+    
+    let speed = !gameStarted ? 100 : (role==="ghost" ? 220 : 160);
+    
     if(cursors.left.isDown) me.sprite.setVelocityX(-speed);
-    if(cursors.right.isDown) me.sprite.setVelocityX(speed);
+    else if(cursors.right.isDown) me.sprite.setVelocityX(speed);
     if(cursors.up.isDown) me.sprite.setVelocityY(-speed);
-    if(cursors.down.isDown) me.sprite.setVelocityY(speed);
+    else if(cursors.down.isDown) me.sprite.setVelocityY(speed);
 
+    // Gửi tọa độ
     broadcast({type:"move",id:myId,x:me.sprite.x,y:me.sprite.y});
-    me.nameText.setPosition(me.sprite.x,me.sprite.y-25);
+    me.nameText.setPosition(me.sprite.x, me.sprite.y-25);
 
-    if(gameStarted && role==="ghost" && isHost){
-        checkGhostCollisions(myId);
+    // LOGIC GIẾT: Nhấn X
+    if(gameStarted && role==="ghost" && Phaser.Input.Keyboard.JustDown(keyX)){
+        attemptKill();
     }
 }
 
-// Hàm bổ trợ để Host check va chạm
-function checkGhostCollisions(ghostId){
-    Object.keys(players).forEach(id=>{
-        if(id!==ghostId && aliveState[id] && players[id].role==="human"){
-            if(Phaser.Math.Distance.Between(players[ghostId].sprite.x, players[ghostId].sprite.y, players[id].sprite.x, players[id].sprite.y)<25){
-                handleKill(id, ghostId);
-                broadcast({type:"playerKilled", target:id, killer:ghostId});
+function attemptKill(){
+    let me = players[myId].sprite;
+    Object.keys(players).forEach(id => {
+        if(id !== myId && aliveState[id]){
+            let target = players[id].sprite;
+            let dist = Phaser.Math.Distance.Between(me.x, me.y, target.x, target.y);
+            if(dist < 50){
+                // Gửi lệnh giết lên Host (Hoặc tự xử nếu mình là Host)
+                if(isHost) {
+                    confirmKill(id, myId);
+                } else {
+                    broadcast({type: "killRequest", target: id, killer: myId});
+                }
             }
         }
     });
@@ -82,160 +97,149 @@ function checkGhostCollisions(ghostId){
 
 function spawnPlayer(id,name,color,x,y){
     if(players[id]) return;
-    let sprite=scene.physics.add.sprite(x,y,"player").setTint(color);
-    let nameText=scene.add.text(x,y-25,name,{fontSize:"12px",color:"#0f0"}).setOrigin(0.5);
-    players[id]={sprite,nameText,role:"human"};
-    aliveState[id]=true;
-    if(!playersMeta[id]) playersMeta[id]={name,color,x,y};
+    let sprite = scene.physics.add.sprite(x, y, "player").setTint(color);
+    sprite.setCollideWorldBounds(true);
+    
+    // Thêm vật lý va chạm giữa các người chơi
+    scene.physics.add.collider(sprite, playerGroup);
+    playerGroup.add(sprite);
+
+    let nameText = scene.add.text(x, y-25, name, {fontSize:"12px", color:"#0f0"}).setOrigin(0.5);
+    players[id] = {sprite, nameText, role:"human"};
+    aliveState[id] = true;
+    if(!playersMeta[id]) playersMeta[id] = {name, color, x, y};
     updateLobbyUI();
 }
 
 function createRoom(){
-    myName=document.getElementById("nameInput").value.trim() || "Host";
-    isHost=true; peer=new Peer();
-    peer.on("open",id=>{
-        myId=id;
-        document.getElementById("info").innerText="ID: "+id;
+    myName = document.getElementById("nameInput").value.trim() || "Host";
+    isHost = true; peer = new Peer();
+    peer.on("open", id => {
+        myId = id;
+        document.getElementById("info").innerText = "ID: " + id;
         document.getElementById("readyBtn").classList.remove("hidden");
         document.getElementById("startBtn").classList.remove("hidden");
-        let color=Phaser.Display.Color.RandomRGB().color;
-        readyState[id]=false;
-        spawnPlayer(id,myName,color,Phaser.Math.Between(100,700),Phaser.Math.Between(100,500));
+        let color = Phaser.Display.Color.RandomRGB().color;
+        spawnPlayer(id, myName, color, Phaser.Math.Between(100,700), Phaser.Math.Between(100,500));
     });
-    peer.on("connection",conn=>{
+    peer.on("connection", conn => {
         setupConn(conn);
         connections.push(conn);
     });
 }
 
 function joinRoom(){
-    myName=document.getElementById("nameInput").value.trim() || "Guest";
+    myName = document.getElementById("nameInput").value.trim() || "Guest";
     let room = document.getElementById("joinInput").value.trim();
     if(!room) return alert("Nhập mã phòng!");
-    peer=new Peer();
-    peer.on("open",id=>{
-        myId=id;
-        let conn=peer.connect(room);
+    peer = new Peer();
+    peer.on("open", id => {
+        myId = id;
+        let conn = peer.connect(room);
         setupConn(conn);
         connections.push(conn);
         document.getElementById("readyBtn").classList.remove("hidden");
-        spawnPlayer(id, myName, 0x00ff00, Phaser.Math.Between(100,700), Phaser.Math.Between(100,500));
     });
 }
 
 function setupConn(conn){
-    conn.on("data",data=>{
-        if(data.type==="sync"){
-            playersMeta=data.playersMeta;
-            readyState=data.readyState;
-            Object.keys(playersMeta).forEach(id=>spawnPlayer(id,playersMeta[id].name,playersMeta[id].color,playersMeta[id].x,playersMeta[id].y));
+    conn.on("data", data => {
+        if(data.type === "sync"){
+            playersMeta = data.playersMeta;
+            readyState = data.readyState;
+            Object.keys(playersMeta).forEach(id => spawnPlayer(id, playersMeta[id].name, playersMeta[id].color, playersMeta[id].x, playersMeta[id].y));
         }
-        if(data.type==="newPlayer" && isHost){
-            let color=Phaser.Display.Color.RandomRGB().color;
-            let rx = Phaser.Math.Between(100,700);
-            let ry = Phaser.Math.Between(100,500);
-            let pData = {id:data.id, name:data.name, color, x:rx, y:ry};
+        if(data.type === "newPlayer" && isHost){
+            let color = Phaser.Display.Color.RandomRGB().color;
+            let rx = Phaser.Math.Between(100,700), ry = Phaser.Math.Between(100,500);
+            let pData = {id: data.id, name: data.name, color, x: rx, y: ry};
             spawnPlayer(data.id, data.name, color, rx, ry);
-            playersMeta[data.id]=pData; readyState[data.id]=false;
-            broadcast({type:"spawn",...pData});
-            conn.send({type:"sync", playersMeta, readyState});
+            playersMeta[data.id] = pData; readyState[data.id] = false;
+            broadcast({type: "spawn", ...pData});
+            conn.send({type: "sync", playersMeta, readyState});
         }
-        if(data.type==="spawn") spawnPlayer(data.id,data.name,data.color,data.x,data.y);
-        if(data.type==="move" && players[data.id]){
-            players[data.id].sprite.setPosition(data.x,data.y);
-            players[data.id].nameText.setPosition(data.x,data.y-25);
+        if(data.type === "spawn") spawnPlayer(data.id, data.name, data.color, data.x, data.y);
+        if(data.type === "move" && players[data.id]){
+            players[data.id].sprite.setPosition(data.x, data.y);
+            players[data.id].nameText.setPosition(data.x, data.y-25);
         }
-        if(data.type==="ready"){
-            readyState[data.id]=data.state;
-            if(isHost) {
-                broadcast(data);
-                updateLobbyUI();
-            }
+        if(data.type === "ready"){
+            readyState[data.id] = data.state;
+            if(isHost) { broadcast(data); updateLobbyUI(); }
         }
-        if(data.type==="start"){
-            handleStartGame(data.ghostId);
-        }
-        if(data.type==="killAttempt" && isHost){
-            if(aliveState[data.target]){
-                handleKill(data.target, conn.peer);
-                broadcast({type:"playerKilled",target:data.target,killer:conn.peer});
-            }
-        }
-        if(data.type==="playerKilled") handleKill(data.target, data.killer);
-        if(data.type==="chat") addChatMessage(data.sender, data.msg);
+        if(data.type === "start") handleStartGame(data.ghostId);
+        if(data.type === "killRequest" && isHost) confirmKill(data.target, data.killer);
+        if(data.type === "playerKilled") handleKill(data.target, data.killer);
+        if(data.type === "chat") addChatMessage(data.sender, data.msg);
     });
-
-    conn.on("open",()=>{
-        if(!isHost) conn.send({type:"newPlayer",id:myId,name:myName});
-    });
+    conn.on("open", () => { if(!isHost) conn.send({type:"newPlayer", id:myId, name:myName}); });
 }
 
-// Tách hàm Start Game để cả Host và Client dùng chung
-function handleStartGame(ghostId){
-    gameStarted=true;
-    document.getElementById("lobby").classList.add("hidden");
-    document.getElementById("chatBox").style.display="flex";
-    role=(myId===ghostId)?"ghost":"human";
-    Object.keys(players).forEach(id => {
-        players[id].role = (id === ghostId) ? "ghost" : "human";
-    });
-    if(role==="ghost") { 
-        players[myId].sprite.setTexture("ghost"); 
-        alert("🔪 BẠN LÀ SÁT NHÂN"); 
-    } else {
-        alert("🙂 Bạn là người thường");
+function confirmKill(targetId, killerId){
+    if(aliveState[targetId]){
+        handleKill(targetId, killerId);
+        broadcast({type: "playerKilled", target: targetId, killer: killerId});
     }
 }
 
 function handleKill(target, killer){
-    aliveState[target]=false;
-    if(players[target]){ players[target].sprite.destroy(); players[target].nameText.destroy(); }
-    if(target===myId){ alert("💀 Bạn đã bị giết!"); location.reload(); }
-    if(killer===myId) addChatMessage("Hệ thống","Bạn đã giết một người 😈");
+    aliveState[target] = false;
+    if(players[target]){ 
+        players[target].sprite.destroy(); 
+        players[target].nameText.destroy(); 
+    }
+    if(target === myId){ alert("💀 BẠN ĐÃ BỊ GIẾT!"); location.reload(); }
+    if(killer === myId) addChatMessage("Hệ thống", "Bạn đã tiễn 1 linh hồn lên đường 😈");
+}
+
+function handleStartGame(ghostId){
+    gameStarted = true;
+    document.getElementById("lobby").classList.add("hidden");
+    document.getElementById("chatBox").style.display = "flex";
+    role = (myId === ghostId) ? "ghost" : "human";
+    if(role === "ghost") { players[myId].sprite.setTexture("ghost"); alert("🔪 BẠN LÀ SÁT NHÂN (Nhấn X để giết)"); }
+    else alert("🙂 Bạn là người thường. Chạy đi!");
 }
 
 function toggleReady(){
-    readyState[myId]=!readyState[myId];
-    broadcast({type:"ready",id:myId,state:readyState[myId]});
+    readyState[myId] = !readyState[myId];
+    broadcast({type: "ready", id: myId, state: readyState[myId]});
     updateLobbyUI();
 }
 
 function updateLobbyUI(){
-    let html="<b>Phòng:</b><br>";
-    Object.keys(playersMeta).forEach(id=> {
-        let status = readyState[id] ? "🟢 Ready" : "🔴 Not Ready";
-        html += playersMeta[id].name + (id === myId ? " (Bạn)" : "") + " - " + status + "<br>";
+    let html = "<b>Phòng:</b><br>";
+    Object.keys(playersMeta).forEach(id => {
+        html += playersMeta[id].name + (id === myId ? " (Bạn)" : "") + (readyState[id] ? " 🟢" : " 🔴") + "<br>";
     });
-    document.getElementById("playerList").innerHTML=html;
+    document.getElementById("playerList").innerHTML = html;
     if(isHost){
-        let v=Object.values(readyState);
-        document.getElementById("startBtn").disabled=!(v.length>=2 && v.every(val=>val));
+        let v = Object.values(readyState);
+        document.getElementById("startBtn").disabled = !(v.length >= 2 && v.every(val => val));
     }
 }
 
-function broadcast(d){ connections.forEach(c=> {if(c.open) c.send(d)}); }
+function broadcast(d){ connections.forEach(c => { if(c.open) c.send(d); }); }
 
 function startGame(){
     if(!isHost) return;
-    let ids=Object.keys(playersMeta);
-    let gId=ids[Math.floor(Math.random()*ids.length)];
-    // Host tự gọi cho mình
+    let ids = Object.keys(playersMeta);
+    let gId = ids[Math.floor(Math.random() * ids.length)];
     handleStartGame(gId);
-    // Gửi cho khách
-    broadcast({type:"start",ghostId:gId});
+    broadcast({type: "start", ghostId: gId});
 }
 
 function addChatMessage(s,m){
-    let d=document.createElement("div"); d.innerHTML=`<span style="color:#0f0">[${s}]:</span> ${m}`;
+    let d = document.createElement("div"); d.innerHTML = `<b>${s}:</b> ${m}`;
     document.getElementById("chatMessages").appendChild(d);
-    document.getElementById("chatMessages").scrollTop=9999;
+    document.getElementById("chatMessages").scrollTop = 9999;
 }
 
-document.getElementById("chatInput").addEventListener("keydown",e=>{
-    if(e.key==="Enter"){
-        let m=e.target.value.trim(); if(!m) return;
-        broadcast({type:"chat",sender:playersMeta[myId].name,msg:m});
-        addChatMessage("Bạn",m); e.target.value="";
+document.getElementById("chatInput").addEventListener("keydown", e => {
+    if(e.key === "Enter"){
+        let m = e.target.value.trim(); if(!m) return;
+        broadcast({type: "chat", sender: playersMeta[myId].name, msg: m});
+        addChatMessage("Bạn", m); e.target.value = "";
     }
 });
 </script>
