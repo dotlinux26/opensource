@@ -2,15 +2,15 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Juna Horror - P2P</title>
+<title>Juna Horror - Full Ready System</title>
 
 <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
 <style>
 body { margin:0; background:#000; color:#0f0; font-family:monospace; overflow:hidden;}
-.ui { position:absolute; top:10px; left:10px; background:#111; padding:15px; border:1px solid #0f0; z-index:10;}
-button,input{ background:#000; color:#0f0; border:1px solid #0f0; padding:5px; margin:3px;}
+.ui { position:absolute; top:10px; left:10px; background:#111; padding:15px; border:1px solid #0f0; z-index:10; width:250px;}
+button,input{ background:#000; color:#0f0; border:1px solid #0f0; padding:5px; margin:3px; width:95%;}
 .hidden{ display:none; }
 </style>
 </head>
@@ -18,11 +18,16 @@ button,input{ background:#000; color:#0f0; border:1px solid #0f0; padding:5px; m
 
 <div class="ui" id="lobby">
 <input id="nameInput" placeholder="Tên của bạn">
-<button onclick="createRoom()">Tạo phòng</button><br>
+<button onclick="createRoom()">Tạo phòng</button>
 <input id="joinInput" placeholder="Mã phòng">
 <button onclick="joinRoom()">Vào phòng</button>
+
 <div id="info"></div>
+
+<button id="readyBtn" class="hidden" onclick="toggleReady()">READY</button>
 <button id="startBtn" class="hidden" onclick="startGame()">START</button>
+
+<div id="playerList"></div>
 </div>
 
 <script>
@@ -43,6 +48,8 @@ let scene, player, cursors
 let peer, myId, myName
 let connections=[]
 let players={}
+let readyState={}
+let myReady=false
 let tombstonesGroup, door
 let destroyedTombs = 0
 let role="human"
@@ -71,10 +78,8 @@ function preload(){
 
 function create(){
  cursors=this.input.keyboard.createCursorKeys()
-
  tombstonesGroup=this.physics.add.staticGroup()
 
- // tường viền
  for(let i=0;i<20;i++){
    scene.physics.add.staticImage(i*40,20,"wall")
    scene.physics.add.staticImage(i*40,580,"wall")
@@ -90,7 +95,6 @@ function update(){
  if(!player || !gameStarted) return
 
  player.setVelocity(0)
-
  let speed = role==="ghost"?200:150
 
  if(cursors.left.isDown) player.setVelocityX(-speed)
@@ -115,7 +119,9 @@ function spawnPlayer(id,color){
  let sprite=scene.physics.add.sprite(400,300,"player")
  sprite.setTint(color)
  players[id]={sprite:sprite,color:color,role:"human"}
+ readyState[id]=false
  if(id===myId) player=sprite
+ updateLobbyUI()
 }
 
 function createRoom(){
@@ -125,6 +131,7 @@ function createRoom(){
  peer.on("open",id=>{
    myId=id
    document.getElementById("info").innerText="Mã phòng: "+id
+   document.getElementById("readyBtn").classList.remove("hidden")
    document.getElementById("startBtn").classList.remove("hidden")
    spawnPlayer(id,Phaser.Display.Color.RandomRGB().color)
  })
@@ -147,33 +154,67 @@ function joinRoom(){
    let conn=peer.connect(room)
    setupConn(conn)
    connections.push(conn)
+   document.getElementById("readyBtn").classList.remove("hidden")
  })
 }
 
 function setupConn(conn){
  conn.on("data",data=>{
-   if(data.type==="move"){
-     if(!players[data.id]) spawnPlayer(data.id,data.color||0xffffff)
-     players[data.id].sprite.setPosition(data.x,data.y)
+   if(data.type==="spawn"){
+     if(!players[data.id]) spawnPlayer(data.id,data.color)
    }
+
+   if(data.type==="move"){
+     if(players[data.id])
+       players[data.id].sprite.setPosition(data.x,data.y)
+   }
+
+   if(data.type==="ready"){
+     readyState[data.id]=data.state
+     updateLobbyUI()
+   }
+
    if(data.type==="start") startMatch(data)
-   if(data.type==="spawn") spawnPlayer(data.id,data.color)
+
    if(data.type==="dead" && data.id===myId){
      alert("💀 Bạn đã chết!")
      location.reload()
    }
+
    if(data.type==="destroy"){
      destroyedTombs++
-     if(destroyedTombs>=REQUIRED_TOMBS){
+     if(destroyedTombs>=REQUIRED_TOMBS)
        door.visible=true
-     }
    }
  })
+
  conn.on("open",()=>{
    let color=Phaser.Display.Color.RandomRGB().color
    spawnPlayer(myId,color)
    conn.send({type:"spawn",id:myId,color:color})
  })
+}
+
+function toggleReady(){
+ myReady=!myReady
+ readyState[myId]=myReady
+ broadcast({type:"ready",id:myId,state:myReady})
+ updateLobbyUI()
+}
+
+function updateLobbyUI(){
+ let html=""
+ Object.keys(players).forEach(id=>{
+   let status=readyState[id]?"🟢 Ready":"🔴 Not Ready"
+   html+=id.substring(0,6)+" - "+status+"<br>"
+ })
+ document.getElementById("playerList").innerHTML=html
+
+ if(isHost){
+   let values=Object.values(readyState)
+   let allReady=values.length>=2 && values.every(v=>v===true)
+   document.getElementById("startBtn").disabled=!allReady
+ }
 }
 
 function broadcast(data){
@@ -182,6 +223,11 @@ function broadcast(data){
 
 function startGame(){
  if(!isHost) return
+ let values=Object.values(readyState)
+ if(values.length<2 || !values.every(v=>v===true)){
+   alert("Chưa đủ người hoặc chưa tất cả READY!")
+   return
+ }
 
  let ids=[myId,...connections.map(c=>c.peer)]
  let ghostId=ids[Math.floor(Math.random()*ids.length)]
@@ -201,10 +247,9 @@ function startMatch(data){
  document.getElementById("lobby").classList.add("hidden")
 
  role=(myId===data.ghostId)?"ghost":"human"
+ players[myId].role=role
 
- if(role==="ghost"){
-   player.setTexture("ghost")
- }
+ if(role==="ghost") player.setTexture("ghost")
 
  data.tombPos.forEach(p=>{
    let t=tombstonesGroup.create(p.x,p.y,"tomb")
