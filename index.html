@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Juna Horror - Fixed Lobby Build</title>
+    <title>Juna Horror - Instant Spawn Build</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
@@ -13,7 +13,6 @@
         #chatBox { position:absolute; bottom:10px; left:10px; width:300px; height:150px; background:#111; border:1px solid #0f0; display:none; flex-direction:column; font-size:12px;}
         #chatMessages { flex:1; overflow-y:auto; padding:5px; }
         #chatInput { border:0; border-top:1px solid #0f0; background:#000; color:#0f0; padding:5px; }
-        #playerList { margin-top:10px; border-top:1px solid #333; padding-top:5px; font-size:13px; }
     </style>
 </head>
 <body>
@@ -52,10 +51,15 @@ function preload(){
 function create(){ cursors=this.input.keyboard.createCursorKeys(); }
 
 function update(){
-    if(!gameStarted || !players[myId] || !aliveState[myId]) return;
+    // Cho phép di chuyển sprite ngay cả khi game chưa Start (để test lobby)
+    if(!players[myId] || !aliveState[myId]) return;
+    
     let me=players[myId];
     me.sprite.setVelocity(0);
-    let speed = role==="ghost"?210:155;
+    
+    // Nếu chưa start thì tốc độ chậm để dạo chơi trong lobby
+    let speed = !gameStarted ? 100 : (role==="ghost"?210:155);
+    
     if(cursors.left.isDown) me.sprite.setVelocityX(-speed);
     if(cursors.right.isDown) me.sprite.setVelocityX(speed);
     if(cursors.up.isDown) me.sprite.setVelocityY(-speed);
@@ -64,7 +68,7 @@ function update(){
     broadcast({type:"move",id:myId,x:me.sprite.x,y:me.sprite.y});
     me.nameText.setPosition(me.sprite.x,me.sprite.y-25);
 
-    if(role==="ghost"){
+    if(gameStarted && role==="ghost"){
         Object.keys(players).forEach(id=>{
             if(id!==myId && aliveState[id] && players[id].role==="human"){
                 if(Phaser.Math.Distance.Between(me.sprite.x,me.sprite.y,players[id].sprite.x,players[id].sprite.y)<25){
@@ -105,7 +109,7 @@ function createRoom(){
 
 function joinRoom(){
     myName=document.getElementById("nameInput").value.trim() || "Guest";
-    let room=document.getElementById("joinInput").value.trim();
+    let room = document.getElementById("joinInput").value.trim();
     if(!room) return alert("Nhập mã phòng!");
     peer=new Peer();
     peer.on("open",id=>{
@@ -114,10 +118,8 @@ function joinRoom(){
         setupConn(conn);
         connections.push(conn);
         document.getElementById("readyBtn").classList.remove("hidden");
-        // Tự add mình vào meta trước để UI hiện tên mình lên
-        playersMeta[id] = {name: myName, color: 0x00ff00, x: 400, y: 300};
-        readyState[id] = false;
-        updateLobbyUI();
+        // SPAWN NGAY LẬP TỨC CHO BẢN THÂN
+        spawnPlayer(id, myName, 0x00ff00, 400, 300);
     });
 }
 
@@ -127,16 +129,17 @@ function setupConn(conn){
             playersMeta=data.playersMeta;
             readyState=data.readyState;
             Object.keys(playersMeta).forEach(id=>spawnPlayer(id,playersMeta[id].name,playersMeta[id].color,playersMeta[id].x,playersMeta[id].y));
-            updateLobbyUI();
         }
         if(data.type==="newPlayer" && isHost){
             let color=Phaser.Display.Color.RandomRGB().color;
             let pData = {id:data.id, name:data.name, color, x:400, y:300};
-            playersMeta[data.id]=pData; readyState[data.id]=false;
-            broadcast({type:"spawn",...pData});
+            // Host spawn người chơi mới trên màn hình mình
             spawnPlayer(data.id, data.name, color, 400, 300);
+            playersMeta[data.id]=pData; readyState[data.id]=false;
+            // Báo cho mọi người khác spawn
+            broadcast({type:"spawn",...pData});
+            // Gửi dữ liệu tổng cho người mới
             conn.send({type:"sync", playersMeta, readyState});
-            updateLobbyUI();
         }
         if(data.type==="spawn") spawnPlayer(data.id,data.name,data.color,data.x,data.y);
         if(data.type==="move" && players[data.id]){
@@ -153,7 +156,6 @@ function setupConn(conn){
             document.getElementById("lobby").classList.add("hidden");
             document.getElementById("chatBox").style.display="flex";
             role=(myId===data.ghostId)?"ghost":"human";
-            Object.keys(players).forEach(id => players[id].role = (id===data.ghostId)?"ghost":"human");
             if(role==="ghost") { players[myId].sprite.setTexture("ghost"); alert("🔪 BẠN LÀ SÁT NHÂN"); }
             else alert("🙂 Bạn là người thường");
         }
@@ -187,7 +189,7 @@ function toggleReady(){
 }
 
 function updateLobbyUI(){
-    let html="<b>Danh sách phòng:</b><br>";
+    let html="<b>Phòng:</b><br>";
     Object.keys(playersMeta).forEach(id=> {
         let status = readyState[id] ? "🟢 Ready" : "🔴 Not Ready";
         html += playersMeta[id].name + (id === myId ? " (Bạn)" : "") + " - " + status + "<br>";
