@@ -256,7 +256,7 @@ function handleKill(target, killer){
 
 function handleStartGame(ghostId){
     gameStarted = true;
-    document.getElementById("lobby").classList.add("hidden");
+    document.getElementById("lobby").style.display = "none";
     document.getElementById("chatBox").style.display = "flex";
     role = (myId === ghostId) ? "ghost" : "human";
     if(role === "ghost") { players[myId].sprite.setTexture("ghost"); alert("🔪 BẠN LÀ SÁT NHÂN (Nhấn X để giết)"); }
