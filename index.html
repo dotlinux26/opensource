@@ -2,17 +2,64 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Juna Horror - Physics & X-Kill Build</title>
+    <title>WHO IS EVIL</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        body { margin:0; background:#000; color:#0f0; font-family:monospace; overflow:hidden;}
-        .ui { position:absolute; top:10px; left:10px; background:#111; padding:15px; border:1px solid #0f0; z-index:10; width:260px;}
+        body { margin:0; background:#000; color:#0f0; font-family:monospace; overflow:hidden;
+      padding: 0; box-sizing:border-box;
+      }
+        .ui { position:absolute; top:10px; left:10px; background:#111; padding:15px; border:1px solid #0f0; z-index:10; width:300px;}
         button,input{ background:#000; color:#0f0; border:1px solid #0f0; padding:5px; margin:3px; width:95%; cursor:pointer;}
         .hidden{ display:none; }
         #chatBox { position:absolute; bottom:10px; left:10px; width:300px; height:150px; background:#111; border:1px solid #0f0; display:none; flex-direction:column; font-size:12px;}
         #chatMessages { flex:1; overflow-y:auto; padding:5px; }
         #chatInput { border:0; border-top:1px solid #0f0; background:#000; color:#0f0; padding:5px; }
+      
+
+      
+      
+      input:focus {
+        outline: 0;
+      }
+      
+      .ui {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+     
+      #info {
+        padding-top:10px;
+        padding-bottom:10px;
+        color: red;
+      }
+       /* Container chính */
+  .copy-box {
+    position: relative;
+    cursor: pointer;
+    transition: background 0.3s;
+  }
+
+  .copy-box:hover {
+    background: #e5e7eb;
+  }
+
+  /* Chỉ dẫn nhỏ bên dưới */
+  .hint {
+    position: absolute;
+    bottom: -20px;
+    left: 5px;
+    font-size: 10px;
+    color: #3b82f6;
+    opacity: 0; /* Mặc định ẩn */
+    transition: opacity 0.3s;
+  }
+
+  /* Hiện chỉ dẫn khi trỏ chuột vào box */
+  .copy-box:hover .hint {
+    opacity: 1;
+  }
     </style>
 </head>
 <body>
@@ -22,7 +69,10 @@
     <button onclick="createRoom()">Tạo phòng</button>
     <input id="joinInput" placeholder="Mã phòng">
     <button onclick="joinRoom()">Vào phòng</button>
-    <div id="info"></div>
+    <div class="copy-box" onclick="navigator.clipboard.writeText(document.getElementById('info').innerText.slice(3)); alert('Đã copy!')">
+      <div id="info"></div>
+      <span class="hint">Ấn để copy nội dung</span>
+    </div>
     <button id="readyBtn" class="hidden" onclick="toggleReady()">READY</button>
     <button id="startBtn" class="hidden" onclick="startGame()" disabled>START</button>
     <div id="playerList"></div>
