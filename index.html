@@ -350,14 +350,15 @@ function addChatMessage(s,m){
 document.getElementById("chatInput").addEventListener("keydown", e => {
     if(e.key === "Enter"){
         e.preventDefault();
-        let m = e.target.value.trim(); // Remove leading/trailing spaces
+        let m = e.target.value.trim();
         
-        if(!m) return; // Block if empty after trimming
+        if(!m) return;
         
         broadcast({type: "chat", sender: playersMeta[myId].name, msg: m});
         addChatMessage("Bạn", m); 
         e.target.value = "";
     }
+    // Space should work normally - don't prevent it!
 });
 </script>
 </body>
