@@ -349,11 +349,10 @@ function addChatMessage(s,m){
 
 document.getElementById("chatInput").addEventListener("keydown", e => {
     if(e.key === "Enter"){
-        e.preventDefault(); // Prevent default Enter behavior
-        let m = e.target.value; // Don't trim - keep ALL spaces
+        e.preventDefault();
+        let m = e.target.value.trim(); // Remove leading/trailing spaces
         
-        // Only check if message has ANY non-space characters
-        if(!m.trim()) return;
+        if(!m) return; // Block if empty after trimming
         
         broadcast({type: "chat", sender: playersMeta[myId].name, msg: m});
         addChatMessage("Bạn", m); 
