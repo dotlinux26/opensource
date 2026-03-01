@@ -1,16 +1,11 @@
-<!-- Updated index.html content -->
+// Update the chat input event listener to allow spaces in messages
 
-<!-- X Skill Cooldown -->
-<p>X skill cooldown: 30 seconds</p>
-
-<!-- Grave System -->
-<p>Grave system: 5 graves, break 3 or more to spawn a door</p>
-
-<!-- Random Door Spawning -->
-<p>Random door spawning implementation details here.</p>
-
-<!-- Dark Viewing Circle with Light Effect -->
-<p>Dark viewing circle with light effect details here.</p>
-
-<!-- Timestamp of Update -->
-<p>Updated on: 2026-03-01 20:40:59 UTC</p>
+document.getElementById('chatInput').addEventListener('keydown', function(event) {
+    // Prevent default action if the input is empty and the key is being pressed
+    if (event.key === 'Enter' && this.value.trim() !== '') {
+        event.preventDefault();
+        sendMessage(this.value);
+        this.value = ''; // Clear the input after sending
+    }
+    // Allow all keys including spaces to be input
+});
