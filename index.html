@@ -39,10 +39,6 @@
     <div class="copy-box" onclick="navigator.clipboard.writeText(document.getElementById('info').innerText.slice(3)); alert('Đã copy!')">
       <div id="info"></div>
       <span class="hint">Ấn để copy nội dung</span>
-    <div id="chat">
-        <input id="chat-input" type="text" placeholder="Type a message..." />
-        <button id="send-button">Send</button>
-    </div>
     <button id="readyBtn" class="hidden" onclick="toggleReady()">READY</button>
     <button id="startBtn" class="hidden" onclick="startGame()" disabled>START</button>
     <div id="playerList"></div>
